@@ -1,396 +1,418 @@
-# Reddit Search & Label Warehouse Pipeline  
-*(DuckDB + Postgres + Sentence Transformers)*
 
-This repository contains a small, reusable pipeline for:
+<div align="center">
 
-- Ingesting **raw Reddit posts** from a CSV / Excel file  
-- Building a **bronze → silver** warehouse in **DuckDB**  
-- Exporting cleaned posts to **Postgres** and building a **lexical (BM25-style) search index**  
-- Adding **dense embeddings** (sentence-transformers) for semantic / hybrid search  
-- Loading **annotation files** (any taxonomy, any tasks) into a generic `gold.label_events` table  
+# 🔍 Reddit Search + Label Pipeline
 
-Everything is driven by a single script:
+DuckDB → Postgres (BM25) → SentenceTransformer embeddings → hybrid search  
++ optional **gold labels** for arbitrary categories (`category_1`, `label_group_1`, …)
 
-    python reddit_pipeline.py [build | embed | search | gold]
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![DuckDB](https://img.shields.io/badge/db-DuckDB-green)
+![Postgres](https://img.shields.io/badge/db-Postgres-orange)
+![Status](https://img.shields.io/badge/status-experimental-purple)
 
----
-
-## 1. Suggested project layout
-
-You can use any layout you like; here is an example:
-
-    .
-    ├─ reddit_pipeline.py
-    ├─ data/
-    │  ├─ raw/
-    │  │  └─ posts_raw.xlsx                # or .csv
-    │  ├─ warehouse/
-    │  │  └─ reddit.duckdb                 # created automatically
-    │  ├─ exports/
-    │  │  └─ silver_posts_psql.csv         # created on build
-    │  └─ annotations/
-    │     └─ labels.csv                    # your annotation file (optional)
-    └─ ...
-
-Update paths in `CONFIG` and `GOLD_CONFIG` if you use a different layout.
+</div>
 
 ---
 
-## 2. Requirements
+## 🚀 Features
 
-- **Python** 3.10+  
-- **PostgreSQL** 14+ (or any modern version with full-text search)  
-- A **virtual environment** is recommended  
-
-Install dependencies:
-
-    pip install duckdb pandas numpy psycopg2-binary sentence-transformers openpyxl
-
----
-
-## 3. Configuration
-
-All configuration lives at the top of `reddit_pipeline.py`:
-
-- `CONFIG` – paths, Postgres DSN, embedding model  
-- `GOLD_CONFIG` – how your annotation file is shaped  
-
-### 3.1 `CONFIG`
-
-    CONFIG = {
-        # Path to the raw Reddit posts file (.csv or .xlsx)
-        "RAW_POSTS_PATH": r"data/raw/posts_raw.xlsx",
-
-        # DuckDB file (bronze / silver / gold live here)
-        "DUCKDB_PATH":   r"data/warehouse/reddit.duckdb",
-
-        # Directory where CSV exports for Postgres will be written
-        "EXPORT_DIR":    r"data/exports",
-
-        # Postgres DSN – EDIT THIS for your environment
-        # Example: "postgresql://postgres:password@localhost:5432/reddit_db"
-        "PG_DSN":        "postgresql://USER:PASSWORD@localhost:5432/DB_NAME",
-
-        # Embedding model for document + query encodings
-        "MODEL_NAME":    "sentence-transformers/all-MiniLM-L6-v2",
-    }
-
-You should edit:
-
-- `RAW_POSTS_PATH` – your raw posts file  
-- `DUCKDB_PATH` – where you want the DuckDB file  
-- `EXPORT_DIR` – a writable directory for exports  
-- `PG_DSN` – your actual Postgres DSN  
+- Ingest Reddit-style posts into **DuckDB** (`bronze.reddit_raw`).
+- Build a cleaned, deduplicated **silver table** (`silver.posts`).
+- Export to **Postgres** and build a **BM25** full-text index.
+- Add **SentenceTransformer** embeddings (no `pgvector` required).
+- Run **hybrid search** (BM25 + cosine similarity).
+- Store arbitrary annotations in **`gold.label_events`**  
+  (`category_1`, `category_2`, `label_group_1`, …; single or multiple annotators).
 
 ---
 
-### 3.2 `GOLD_CONFIG` – generic labels → `gold.label_events`
+## 🧩 Requirements
 
-The pipeline can load **any annotation schema** into a tidy table `gold.label_events`.  
+- Python 3.10+
+- DuckDB
+- PostgreSQL 13+
+- A SentenceTransformer model  
+  (default: `sentence-transformers/all-MiniLM-L6-v2`)
 
-You only need:
+`requirements.txt`:
 
-- a column that matches `silver.posts.post_id`  
-- one or more label columns (e.g. `category_1`, `category_2`, `label_group_1`, etc.)
+```txt
+duckdb
+pandas
+numpy
+psycopg2-binary
+sentence-transformers
+openpyxl
+```
 
-    GOLD_CONFIG = {
-        # Path to your annotation file (.csv or .xlsx)
-        "LABELS_PATH": r"data/annotations/labels.csv",
+Install:
 
-        # Column that lines up with silver.posts.post_id
-        "ITEM_ID_COL": "post_id",
+```bash
+pip install -r requirements.txt
+```
 
-        # What kind of item is being labeled
-        # (keep "post" for Reddit posts, or change if you adapt the pipeline)
-        "ITEM_TYPE": "post",
+---
 
-        # Name of the annotator column in your file,
-        # or None for single-annotator files
-        "ANNOTATOR_COL": None,
+## ⚡ Quick start
 
-        # Used only if ANNOTATOR_COL is None or missing.
-        # Set this if you want a default annotator ID (e.g., "rater_1").
-        "DEFAULT_ANNOTATOR": None,
+```bash
+# 1. Build bronze + silver + Postgres BM25
+python reddit_pipeline.py build
 
-        # Columns that are NOT label tasks (IDs, metadata, free-text notes, etc.).
-        # Any column not listed here, and not ITEM_ID_COL / ANNOTATOR_COL,
-        # becomes a task_name in gold.label_events.
-        "IGNORE_COLS": [
-            # ID / linkage
-            "post_id", "Post ID", "id",
+# 2. Add embeddings
+python reddit_pipeline.py embed
 
-            # annotator / coder metadata
-            "annotator", "__annotator__", "coder",
+# 3. Run a hybrid search
+python reddit_pipeline.py search "your query here" 20
 
-            # text / metadata you don’t want treated as labels
-            "title", "text", "selftext", "subreddit",
-            "created_at", "run_id", "notes",
-        ],
+# 4. (optional) Load annotations into gold.label_events
+python reddit_pipeline.py gold
+```
 
-        # Extra metadata stored with label_events
-        "LABEL_SOURCE": "human",
-        "GUIDELINE_VER": "v1",
-    }
+---
 
-#### Example A: single-annotator file
+## 📁 Layout
 
-Annotation file (example):
+```text
+.
+├─ reddit_pipeline.py
+├─ README.md
+├─ requirements.txt
+└─ data/
+   ├─ raw/
+   │   └─ posts_raw.xlsx              # or .csv
+   ├─ annotations/
+   │   └─ labels.csv                  # optional: annotation file
+   ├─ exports/
+   │   └─ silver_posts_psql.csv       # auto-generated for Postgres
+   └─ warehouse/
+       └─ reddit.duckdb               # DuckDB (bronze/silver/gold)
+```
 
-| post_id | category_1 | category_2 | label_group_1 |
-|--------:|-----------:|-----------:|--------------:|
-| 1a2b3c  | option_a   | option_x   | label_1       |
-| 9x8y7z  | option_b   | option_y   | label_3       |
+All paths are controlled by `CONFIG` in `reddit_pipeline.py`.
 
-Config:
+---
 
-    GOLD_CONFIG = {
-        "LABELS_PATH": r"data/annotations/labels.csv",
-        "ITEM_ID_COL": "post_id",
-        "ITEM_TYPE": "post",
-        "ANNOTATOR_COL": None,
-        "DEFAULT_ANNOTATOR": "rater_1",
-        "IGNORE_COLS": ["post_id"],
-        "LABEL_SOURCE": "human",
-        "GUIDELINE_VER": "v1_categories",
-    }
+## ⚙️ Configuration
 
-This produces rows in `gold.label_events` like:
+### Core config
 
-| item_type | item_id | task_name     | label_value | annotator_id |
-|----------|--------:|--------------:|-----------:|-------------:|
-| post     | 1a2b3c  | category_1    | option_a   | rater_1      |
-| post     | 1a2b3c  | category_2    | option_x   | rater_1      |
-| post     | 1a2b3c  | label_group_1 | label_1    | rater_1      |
+```python
+CONFIG = {
+    "RAW_POSTS_PATH": r"data/raw/posts_raw.xlsx",          # raw posts (.csv / .xlsx)
+    "DUCKDB_PATH":   r"data/warehouse/reddit.duckdb",      # DuckDB file
+    "EXPORT_DIR":    r"data/exports",                      # Postgres export dir
+    "PG_DSN":        "postgresql://USER:PASS@localhost:5432/DB_NAME",
+    "MODEL_NAME":    "sentence-transformers/all-MiniLM-L6-v2",
+}
+```
 
-#### Example B: multi-annotator file
+### Column mapping (edit to match your raw file)
+
+```python
+CSV_COL_MAP = {
+    "Post ID":             "post_id",
+    "post_id":             "post_id",
+    "id":                  "post_id",
+
+    "Subreddit":           "subreddit",
+    "subreddit":           "subreddit",
+
+    "Author":              "author",
+    "author":              "author",
+
+    "Created (UTC)":       "created_utc",
+    "created_utc":         "created_utc",
+
+    "Title":               "title",
+    "title":               "title",
+    "Text":                "selftext",
+    "selftext":            "selftext",
+
+    "URL":                 "url",
+    "url":                 "url",
+
+    "Score":               "score",
+    "score":               "score",
+    "Number of Comments":  "num_comments",
+    "num_comments":        "num_comments",
+
+    "Flair":               "flair",
+    "link_flair_text":     "flair",
+}
+```
+
+---
+
+## 🧱 Pipeline overview
+
+### 1. Bronze (raw → bronze.reddit_raw)
+
+- Reads `CONFIG["RAW_POSTS_PATH"]` (.csv or .xlsx).
+- Normalizes column names via `CSV_COL_MAP`.
+- Adds metadata: `run_id`, `ingested_at`, `source_file`.
+- Writes to `bronze.reddit_raw` in DuckDB (table is cleared on each run).
+
+### 2. Silver (bronze.reddit_raw → silver.posts)
+
+- Deduplicates by `post_id` (latest `created_utc` / `ingested_at` wins).
+- Cleans text:
+  - empty strings → `NULL`
+  - `[deleted]`, `[removed]` → `NULL`
+- Writes to `silver.posts` with:
+
+  - `post_id`
+  - `subreddit`
+  - `author_id`
+  - `created_utc`
+  - `title_clean`
+  - `text_clean`
+  - `url`
+  - `score`
+  - `num_comments`
+  - `flair`
+  - `run_id`
+  - `source_file`
+
+### 3. Export to Postgres
+
+- Exports `silver.posts` to `EXPORT_DIR/silver_posts_psql.csv`.
+- Creates schema/table:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS serving_test;
+
+CREATE TABLE IF NOT EXISTS serving_test.posts_search_test (
+    post_id        TEXT PRIMARY KEY,
+    subreddit      TEXT,
+    author_id      TEXT,
+    created_utc    TEXT,
+    title_clean    TEXT,
+    text_clean     TEXT,
+    url            TEXT,
+    score          TEXT,
+    num_comments   TEXT,
+    flair          TEXT,
+    run_id         TEXT,
+    source_file    TEXT,
+    lexical        tsvector,
+    embedding_text TEXT
+);
+```
+
+- Loads CSV into `serving_test.posts_search_test`.
+- Builds BM25 vector + GIN index:
+
+```sql
+UPDATE serving_test.posts_search_test
+SET lexical =
+    to_tsvector(
+        'english',
+        COALESCE(title_clean, '') || ' ' || COALESCE(text_clean, '')
+    );
+
+CREATE INDEX IF NOT EXISTS idx_posts_search_test_lexical
+ON serving_test.posts_search_test
+USING GIN (lexical);
+```
+
+### 4. Embeddings
+
+`python reddit_pipeline.py embed`:
+
+- Reads all rows from `silver.posts`.
+- Builds text: `title_clean + "\n\n" + text_clean`.
+- Encodes with `SentenceTransformer(CONFIG["MODEL_NAME"])`.
+- Normalizes embeddings.
+- Stores as strings (e.g. `"[0.01,0.02,...]"`) in  
+  `serving_test.posts_search_test.embedding_text`.
+
+### 5. Hybrid search
+
+`python reddit_pipeline.py search "query" [top_k]`:
+
+1. Encodes the query to a normalized vector.
+2. Asks Postgres for BM25 top-N candidates (lexical match + `ts_rank_cd`).
+3. Parses `embedding_text` into NumPy arrays.
+4. Computes cosine similarity with the query.
+5. Normalizes BM25 scores and cosine scores.
+6. Combines them:
+
+   ```text
+   hybrid = bm25_weight * bm25_norm + (1 - bm25_weight) * cosine_norm
+   ```
+
+7. Prints ranked results with `post_id`, subreddit, title, snippet and scores.
+
+---
+
+## 🥇 Gold labels
+
+Annotations are stored in a long-format DuckDB table: `gold.label_events`.
+
+```sql
+CREATE SCHEMA IF NOT EXISTS gold;
+
+CREATE TABLE IF NOT EXISTS gold.label_events (
+    item_type     TEXT,
+    item_id       TEXT,
+    task_name     TEXT,
+    label_value   TEXT,
+    annotator_id  TEXT,
+    label_source  TEXT,
+    confidence    DOUBLE,
+    guideline_ver TEXT,
+    created_at    TIMESTAMP,
+    run_id        TEXT
+);
+```
+
+### GOLD_CONFIG
+
+Configure how your annotation file is interpreted:
+
+```python
+GOLD_CONFIG = {
+    "LABELS_PATH": r"data/annotations/labels.csv",  # .csv or .xlsx
+    "ITEM_ID_COL": "post_id",                       # must match silver.posts.post_id
+    "ITEM_TYPE":   "post",                          # e.g. "post", "comment", "image"
+
+    "ANNOTATOR_COL": None,                          # or "annotator", "__annotator__", ...
+    "DEFAULT_ANNOTATOR": None,                      # e.g. "rater_1" if you want a default
+
+    "IGNORE_COLS": [
+        "post_id", "Post ID", "id",
+        "annotator", "__annotator__", "coder",
+        "title", "text", "selftext", "subreddit",
+        "created_at", "run_id", "notes",
+    ],
+
+    "LABEL_SOURCE":  "human",
+    "GUIDELINE_VER": "v1",
+}
+```
+
+All non-ignored, non-ID, non-annotator columns become separate `task_name`s  
+(e.g. `category_1`, `category_2`, `label_group_1`, …).
+
+---
+
+### Example A — single annotator
 
 Annotation file:
 
-| post_id | annotator | category_1 | label_group_1 |
-|--------:|----------:|-----------:|--------------:|
-| 1a2b3c  | r1        | option_a   | label_1       |
-| 1a2b3c  | r2        | option_b   | label_2       |
+```text
+post_id,category_1,category_2,label_group_1
+1a2b3c,option_a,option_x,label_1
+9x8y7z,option_b,option_y,label_3
+```
 
 Config:
 
-    GOLD_CONFIG = {
-        "LABELS_PATH": r"data/annotations/labels_multi.csv",
-        "ITEM_ID_COL": "post_id",
-        "ITEM_TYPE": "post",
-        "ANNOTATOR_COL": "annotator",
-        "DEFAULT_ANNOTATOR": None,
-        "IGNORE_COLS": ["post_id", "annotator"],
-        "LABEL_SOURCE": "human",
-        "GUIDELINE_VER": "v1_multi_raters",
-    }
+```python
+GOLD_CONFIG = {
+    "LABELS_PATH":       r"data/annotations/labels.csv",
+    "ITEM_ID_COL":       "post_id",
+    "ITEM_TYPE":         "post",
+    "ANNOTATOR_COL":     None,
+    "DEFAULT_ANNOTATOR": "rater_1",
+    "IGNORE_COLS":       ["post_id"],
+    "LABEL_SOURCE":      "human",
+    "GUIDELINE_VER":     "v1_single",
+}
+```
+
+This produces rows in `gold.label_events`:
+
+```text
+item_type | item_id | task_name     | label_value | annotator_id
+--------- |--------|-------------- |------------ |------------
+post      | 1a2b3c | category_1    | option_a    | rater_1
+post      | 1a2b3c | category_2    | option_x    | rater_1
+post      | 1a2b3c | label_group_1 | label_1     | rater_1
+post      | 9x8y7z | category_1    | option_b    | rater_1
+post      | 9x8y7z | category_2    | option_y    | rater_1
+post      | 9x8y7z | label_group_1 | label_3     | rater_1
+```
+
+### Example B — multiple annotators
+
+Annotation file:
+
+```text
+post_id,annotator,category_1,category_2
+1a2b3c,rater_1,option_a,option_x
+1a2b3c,rater_2,option_b,option_y
+```
+
+Config:
+
+```python
+GOLD_CONFIG = {
+    "LABELS_PATH":       r"data/annotations/labels_multi.csv",
+    "ITEM_ID_COL":       "post_id",
+    "ITEM_TYPE":         "post",
+    "ANNOTATOR_COL":     "annotator",
+    "DEFAULT_ANNOTATOR": None,
+    "IGNORE_COLS":       ["post_id"],
+    "LABEL_SOURCE":      "human",
+    "GUIDELINE_VER":     "v1_multi",
+}
+```
 
 ---
 
-## 4. How the pipeline works
+### Loading labels
 
-### 4.1 Bronze (raw) – DuckDB
+```bash
+python reddit_pipeline.py gold
+```
 
-- Loads the raw posts file into **DuckDB**.  
-- Normalizes column names using `CSV_COL_MAP` (e.g., `Post ID` → `post_id`).  
-- Adds metadata: `run_id`, `ingested_at`, `source_file`.  
-- Stores everything in `bronze.reddit_raw`.  
+Inspect:
 
-### 4.2 Silver (cleaned) – DuckDB
+```python
+import duckdb
+from reddit_pipeline import CONFIG
 
-- Deduplicates posts by `post_id` (keeps most recent `created_utc`, `ingested_at`).  
-- Normalizes text columns (empty strings → NULL, certain markers filtered).  
-- Stores cleaned data in `silver.posts`.  
-
-### 4.3 Export to Postgres
-
-- Exports `silver.posts` to a `|`-delimited CSV in `EXPORT_DIR`.  
-- Creates (or ensures) a Postgres schema/table (e.g., `serving_test.posts_search_test`).  
-- Loads the CSV into Postgres.  
-
-### 4.4 Lexical index (BM25-style)
-
-- Builds a `tsvector` column `lexical` combining title + body text.  
-- Creates a GIN index on `lexical` for fast full-text search.  
-
-### 4.5 Embeddings
-
-- Uses `SentenceTransformer` with `CONFIG["MODEL_NAME"]`.  
-- Encodes each post into a dense vector.  
-- Stores vectors as text in `embedding_text` (e.g., `"[0.01,0.12,...]"`).  
-
-### 4.6 Gold labels
-
-- Reads your annotation file guided by `GOLD_CONFIG`.  
-- Treats each non-ignored column as a separate **task** (`task_name`).  
-- Writes one row per `(item_id, task_name, label_value, annotator)` into `gold.label_events`.  
+con = duckdb.connect(CONFIG["DUCKDB_PATH"])
+print(con.execute("SELECT * FROM gold.label_events LIMIT 20;").df())
+```
 
 ---
 
-## 5. Commands
+## 🧪 Debugging
 
-### 5.1 Build bronze + silver + Postgres
+### DuckDB
 
-    python reddit_pipeline.py build
+```bash
+python
+```
 
-This will:
+```python
+import duckdb
+from reddit_pipeline import CONFIG
 
-1. Create/update `reddit.duckdb`  
-2. Build `bronze.reddit_raw` and `silver.posts`  
-3. Export `silver_posts_psql.csv`  
-4. Create / truncate the Postgres search table  
-5. Populate it and build the lexical index  
+con = duckdb.connect(CONFIG["DUCKDB_PATH"])
+print(con.execute("SELECT COUNT(*) FROM silver.posts").fetchone())
+```
 
----
+### Postgres
 
-### 5.2 Compute embeddings
+```bash
+psql "postgresql://USER:PASS@localhost:5432/DB_NAME"
+```
 
-    python reddit_pipeline.py embed
-
-This:
-
-- Reads posts from `silver.posts`  
-- Encodes them with the sentence-transformers model  
-- Writes embeddings into `embedding_text` column in Postgres  
-
----
-
-### 5.3 Run a hybrid search
-
-    python reddit_pipeline.py search "example query" 10
-
-Arguments:
-
-- `query` (required): text query  
-- `top_k` (optional): number of results (default `20`)  
-
-The script prints ranked results with:
-
-- BM25-style score (from Postgres full-text search)  
-- Cosine similarity score (embeddings)  
-- A combined **hybrid** score  
+```sql
+SELECT COUNT(*) FROM serving_test.posts_search_test;
+```
 
 ---
 
-### 5.4 Load annotations into `gold.label_events`
+## 🏁 Summary
 
-Once `GOLD_CONFIG` is correctly set and your annotation file exists:
-
-    python reddit_pipeline.py gold
-
-This will:
-
-- Parse the annotation file  
-- Identify **task columns** (anything not in `IGNORE_COLS` / `ITEM_ID_COL` / `ANNOTATOR_COL`)  
-- Insert rows into `gold.label_events` in DuckDB  
-
-You can inspect the result in a Python shell:
-
-    import duckdb
-    con = duckdb.connect("data/warehouse/reddit.duckdb")
-    df = con.execute("SELECT * FROM gold.label_events LIMIT 20;").df()
-    print(df)
-
----
-
-## 6. Expected input formats
-
-### 6.1 Raw posts file
-
-Minimal required columns (directly or via `CSV_COL_MAP`):
-
-- An ID: `Post ID`, `post_id`, or `id`  
-- Subreddit: `Subreddit` / `subreddit`  
-- Title: `Title` / `title`  
-- Body text: `Text` / `selftext`  
-- Timestamp: `Created (UTC)` / `created_utc`  
-
-Optional:
-
-- `Author` / `author`  
-- `Score` / `score`  
-- `Number of Comments` / `num_comments`  
-- `Flair` / `link_flair_text`  
-- `URL` / `url`  
-
-If your headers differ, map them in `CSV_COL_MAP`.
-
-### 6.2 Annotation file
-
-- Must contain `ITEM_ID_COL` (e.g., `post_id`) that matches `silver.posts.post_id`.  
-- Any column not in `IGNORE_COLS` and not `ITEM_ID_COL` / `ANNOTATOR_COL`
-  is treated as a label task (e.g., `category_1`, `category_2`, `label_group_1`).
-
-Example:
-
-    post_id,category_1,category_2,label_group_1
-    1a2b3c,option_a,option_x,label_1
-    9x8y7z,option_b,option_y,label_3
-
----
-
-## 7. Troubleshooting
-
-**1. `FileNotFoundError: Labels file not found`**
-
-- Check `GOLD_CONFIG["LABELS_PATH"]`.  
-- Make sure the path exists and uses correct quoting (e.g., `r"..."` on Windows).  
-
-**2. `ITEM_ID_COL 'post_id' not in labels file`**
-
-- Your annotation file does not have that exact column.  
-- Rename the column or update `ITEM_ID_COL`.  
-
-**3. Postgres connection errors**
-
-- Confirm Postgres is running.  
-- Confirm the database in `PG_DSN` exists.  
-- Check username/password/port.  
-
-**4. Undefined table or schema in Postgres**
-
-- Run `python reddit_pipeline.py build` at least once; this creates the schema/table.  
-
-**5. Embeddings column is empty**
-
-- Ensure you ran `python reddit_pipeline.py embed` after `build`.  
-- Confirm the embedding model downloaded successfully.  
-
----
-
-## 8. Extending the pipeline
-
-Ideas for extending this repo:
-
-- Add a parallel pipeline for **comments** (separate DuckDB + Postgres tables).  
-- Swap out the embedding model for a domain-specific one.  
-- Add a simple web UI or notebook for interactive search.  
-- Use `gold.label_events` for:
-  - Inter-annotator agreement  
-  - Training supervised models  
-  - Auditing label distributions across tasks (`category_1`, `label_group_1`, etc.)  
-
----
-
-## 9. License
-
-Add your preferred license here (MIT, Apache-2.0, etc.).
-
----
-
-## 10. Quick start checklist
-
-1. Clone the repo  
-2. Create & activate a virtualenv  
-3. Install dependencies  
-4. Edit `CONFIG` (paths + Postgres DSN)  
-5. Put your raw posts file in `data/raw/`  
-6. Run: `python reddit_pipeline.py build`  
-7. Run: `python reddit_pipeline.py embed`  
-8. Configure `GOLD_CONFIG` and run: `python reddit_pipeline.py gold` (optional)  
-9. Try a search: `python reddit_pipeline.py search "example query" 10`  
-
-You now have:
-
-- a **DuckDB warehouse** (`bronze`, `silver`, `gold`)  
-- a **Postgres search table** with BM25-style + embedding-based search  
-- a **generic label_events table** that can handle any set of categories / label groups  
+- Configure paths + DSN in `CONFIG`.
+- Configure annotation behavior in `GOLD_CONFIG`.
+- Run: `build → embed → search → gold`.
+- Reuse `gold.label_events` for any taxonomy  
+  (`category_1`, `category_2`, `label_group_1`, …) without changing pipeline code.
