@@ -162,6 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_search_test_lexical
 ON serving_test.posts_search_test
 USING GIN (lexical);
 ```
+used PostgreSQL’s native full-text search. I store a tsvector of title + text, index it with a GIN index, and use ts_rank_cd as my BM25-style ranking function.
 
 ### 4. Embeddings
 
@@ -174,6 +175,7 @@ USING GIN (lexical);
 - Stores as strings (e.g. `"[0.01,0.02,...]"`) in  
   `serving_test.posts_search_test.embedding_text`.
 
+used sentence-transformers/all-MiniLM-L6-v2 to encode posts and queries into embeddings and then compute cosine similarity. That lets me do semantic / hybrid search on top of the BM25 results.
 ### 5. Hybrid search
 
 `python reddit_pipeline.py search "query" [top_k]`:
