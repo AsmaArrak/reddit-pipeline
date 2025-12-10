@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# DuckDB database files
+*.duckdb
+
+# Data files (raw & annotation)
+data/raw/
+data/annotations/
+data/exports/
+
+# OS files
+.DS_Store
+Thumbs.db

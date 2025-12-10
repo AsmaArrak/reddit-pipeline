@@ -1,0 +1,6 @@
+duckdb
+pandas
+numpy
+psycopg2-binary
+sentence-transformers
+openpyxl
