@@ -327,34 +327,6 @@ print(con.execute("SELECT * FROM gold.label_events LIMIT 20;").df())
 
 ---
 
-## 🧪 Debugging
-
-### DuckDB
-
-```bash
-python
-```
-
-```python
-import duckdb
-from reddit_pipeline import CONFIG
-
-con = duckdb.connect(CONFIG["DUCKDB_PATH"])
-print(con.execute("SELECT COUNT(*) FROM silver.posts").fetchone())
-```
-
-### Postgres
-
-```bash
-psql "postgresql://USER:PASS@localhost:5432/DB_NAME"
-```
-
-```sql
-SELECT COUNT(*) FROM serving_test.posts_search_test;
-```
-
----
-
 ## 🏁 Summary
 
 - Configure paths + DSN in `CONFIG`.
