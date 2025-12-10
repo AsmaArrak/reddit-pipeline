@@ -191,6 +191,7 @@ USING GIN (lexical);
 
 7. Prints ranked results with `post_id`, subreddit, title, snippet and scores.
 
+This is using BM25 from Postgres and cosine similarity from sentence-transformer embeddings. Scores are normalized and combined into a hybrid score.
 ---
 
 ## 🥇 Gold labels
