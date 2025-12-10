@@ -72,24 +72,6 @@ python reddit_pipeline.py gold
 
 ---
 
-## 📁 Layout
-
-```text
-.
-├─ reddit_pipeline.py
-├─ README.md
-├─ requirements.txt
-└─ data/
-   ├─ raw/
-   │   └─ posts_raw.xlsx              # or .csv
-   ├─ annotations/
-   │   └─ labels.csv                  # optional: annotation file
-   ├─ exports/
-   │   └─ silver_posts_psql.csv       # auto-generated for Postgres
-   └─ warehouse/
-       └─ reddit.duckdb               # DuckDB (bronze/silver/gold)
-```
-
 All paths are controlled by `CONFIG` in `reddit_pipeline.py`.
 
 ---
@@ -107,42 +89,6 @@ CONFIG = {
     "MODEL_NAME":    "sentence-transformers/all-MiniLM-L6-v2",
 }
 ```
-
-### Column mapping (edit to match your raw file)
-
-```python
-CSV_COL_MAP = {
-    "Post ID":             "post_id",
-    "post_id":             "post_id",
-    "id":                  "post_id",
-
-    "Subreddit":           "subreddit",
-    "subreddit":           "subreddit",
-
-    "Author":              "author",
-    "author":              "author",
-
-    "Created (UTC)":       "created_utc",
-    "created_utc":         "created_utc",
-
-    "Title":               "title",
-    "title":               "title",
-    "Text":                "selftext",
-    "selftext":            "selftext",
-
-    "URL":                 "url",
-    "url":                 "url",
-
-    "Score":               "score",
-    "score":               "score",
-    "Number of Comments":  "num_comments",
-    "num_comments":        "num_comments",
-
-    "Flair":               "flair",
-    "link_flair_text":     "flair",
-}
-```
-
 ---
 
 ## 🧱 Pipeline overview
